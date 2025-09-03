@@ -51,7 +51,7 @@ This work adheres to the TRIPOD guideline for prediction model development and v
 ### How to Cite
 If you use this repository or build upon this work, please cite:
 - Johnson AEW, Pollard TJ, Shen L, et al. MIMIC-III, a freely accessible critical care database. Scientific Data. 2016.
-- Shenglong Lin. Validation of an AKI prediction model in decompensated cirrhosis using MIMIC-III. GitHub repository: <link to be added>.
+- Shenglong Lin. Validation of an AKI prediction model in decompensated cirrhosis using MIMIC-III. GitHub repository: https://github.com/AlongLin/Renal_AKI.git.
 
 ### License
 Specify a license for reuse. If unsure, consider MIT, Apache-2.0, or GPL-3.0. Until specified, all rights reserved.
@@ -59,4 +59,3 @@ Specify a license for reuse. If unsure, consider MIT, Apache-2.0, or GPL-3.0. Un
 ### Contact
 - Maintainer: Shenglong Lin
 - Email: alonglin2008@live.cn
-- GitHub: <your-username>
