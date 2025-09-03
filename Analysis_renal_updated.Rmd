@@ -1,0 +1,1138 @@
+---
+title: "MIMIC III ANALYSIS Updated"
+author: "ShenglongLin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(naniar)
+library(readxl)
+library(writexl)
+library(RPostgreSQL)
+```
+
+# Preface
+
+This is my first time analyzing MIMIC data
+
+
+# Data Extraction and Merging
+Extract Cirrhosis and AKI
+```{r , echo=TRUE}
+
+icd_label = read.csv(file = "~/MIMIC_DB/Data/icd_labels.csv")
+
+head(icd_label)
+
+```
+
+
+> NOS (Not Otherwise Specified): This is similar to "unspecified." It's used when there is not enough information about the condition to make a more specific diagnosis. NEC (Not Elsewhere Classified): This is used when a condition does not fit into any other specific category available in the classification system but is known in enough detail to be placed apart from more general categories.
+
+
+```{r , echo=TRUE}
+
+icd_label %>% 
+  filter(str_detect(short_title, "Cirrhosis|cirrhosis")) 
+
+```
+
+
+We can filter using admission diagnoses
+
+```{r , echo=TRUE}
+
+icd_label %>% 
+  filter(str_detect(short_title, "Renal failure")) 
+
+```
+
+Extract patients with hematologic disease diagnoses
+```{r , echo=TRUE}
+
+icd_label %>% 
+  filter(str_detect(short_title, "Leukemia|leukemia")) 
+
+```
+
+Extract patients with malignancy diagnoses
+```{r , echo=TRUE}
+
+Mali_icd = icd_label %>% 
+  filter(str_detect(short_title, "leukemia|Leukemia|lymphoma|Lymphoma|cancer|Cancer|tumor|Tumor|Melanoma|melanoma|carcinoma|Carcinoma|(malig neoplasm)|malig|Malig")) %>%   
+  pull(icd9_code)
+
+```
+
+
+
+Extract patients with hypertension diagnoses
+
+```{r , echo=TRUE}
+
+HT_icd  = icd_label %>% 
+  filter(str_detect(short_title, "Hypertension|hypertension")) %>% 
+  pull(icd9_code)
+
+```
+
+
+Extract patients with diabetes diagnoses
+
+```{r , echo=TRUE}
+
+DM_icd  = icd_label %>% 
+  filter(str_detect(short_title, "Diabetes|diabetes")) %>% 
+  pull(icd9_code)
+
+```
+
+
+Extract patients with hepatic encephalopathy diagnoses
+
+```{r , echo=TRUE}
+
+HE_icd  = icd_label %>% 
+  filter(str_detect(short_title, "Hepatic encephalopathy")) %>% 
+  pull(icd9_code)
+
+```
+
+
+Extract patients with an ascites diagnosis
+
+```{r , echo=TRUE}
+
+asc_icd  = icd_label %>% 
+  filter(str_detect(short_title, "ascites")) %>% 
+  pull(icd9_code)
+
+```
+
+
+The above operations are for practice; performing them directly in R later may be more convenient.
+
+Connect to the database
+```{r dbconnect, echo=TRUE}
+# Load configuration settings
+dbdriver <- 'PostgreSQL'
+host  <- '192.168.3.12'
+port  <- '5432'
+user  <- 'alo'
+password <- 'postgres'
+dbname <- 'mimic'
+schema <- 'mimiciii'
+
+# Connect to the database using the configuration settings
+con <- dbConnect(dbDriver(dbdriver), dbname = dbname, host = host, port = port, 
+                 user = user, password = password)
+
+# Set the default schema
+dbExecute(con, paste("SET search_path TO ", schema, sep=" "))
+```
+
+
+Extract patients with cirrhosis diagnoses
+```{r load_data, echo=TRUE}
+sql_query <- "SELECT * FROM diagnoses_icd where icd9_code = '5712' OR icd9_code = '5715' OR icd9_code = '5716';"
+
+data <- dbGetQuery(con, sql_query)
+
+pat = data
+
+head(pat)
+```
+
+
+Number of patients (unique subject_id)
+```{r , echo=TRUE}
+pat %>% distinct(subject_id) %>% 
+  nrow()
+```
+
+
+Extract the first hospital admission per patient (by hadm_id)
+```{r , echo=TRUE}
+
+pat = pat %>% 
+  group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()
+
+head(pat)
+
+```
+
+
+Extract patient IDs (only first admission records)
+
+```{r , echo=TRUE}
+
+ha_id = pat %>%
+   pull(hadm_id)
+
+su_id = pat %>% 
+  pull(subject_id)
+
+```
+
+
+Extract malignancy, hypertension, diabetes, and hepatic encephalopathy
+
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM diagnoses_icd;"
+
+data <- dbGetQuery(con, sql_query)
+
+
+mali = data %>% 
+  filter(icd9_code %in% Mali_icd) %>% 
+  filter(subject_id %in% su_id) %>% 
+  group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(MT = 1)
+
+HT = data %>% 
+  filter(icd9_code %in% HT_icd) %>% 
+    filter(subject_id %in% su_id) %>% 
+   group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(HT = 1) 
+
+DM = data %>% 
+  filter(icd9_code %in% DM_icd) %>% 
+    filter(subject_id %in% su_id) %>% 
+  group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(DM = 1)
+  
+
+HE = data %>% 
+  filter(icd9_code %in% HE_icd) %>% 
+    filter(subject_id %in% su_id) %>% 
+    group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(HE = 1) 
+
+mali_asc = data %>% 
+  filter(icd9_code %in% asc_icd) %>% 
+    filter(subject_id %in% su_id) %>% 
+    group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(asc = 3) 
+
+```
+
+
+## Extract infection events
+
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM MICROBIOLOGYEVENTS;"
+
+data <- dbGetQuery(con, sql_query)
+
+infec_eve = data |>
+  filter(subject_id %in% su_id) |> 
+  group_by(subject_id) %>% 
+  arrange(hadm_id) %>% ## sort by first admission
+  slice(1) %>% 
+  ungroup()%>% 
+  mutate(Infection = ifelse(
+    is.na(interpretation), 0, 1
+  ) 
+           )
+
+```
+
+## Extract laboratory item IDs
+
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM d_labitems;"
+
+data <- dbGetQuery(con, sql_query)
+
+lab_label = data
+
+```
+
+
+MIMIC-III does not contain CysC data
+
+```{r, echo=TRUE}
+lab_id1 = data %>% 
+  filter(str_detect(label, 
+                    "(Alanine Aminotransferase)|Albumin|(Alkaline Phosphatase)|(Gamma Glutamyltransferase)|(Anion Gap)"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id2 = data %>% 
+  filter(str_detect(label, 
+                    "(Asparate Aminotransferase)|(Calcium, Total)|Chloride|Creatinine"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id3 = data %>% 
+  filter(str_detect(label, 
+                    "(Bilirubin, Total)|(Bilirubin, Indirect)|Glucose|Hematocrit|Hemoglobin|Lactate|Magnesium"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id4 = data %>% 
+  filter(str_detect(label, 
+                    "(Mean Corpuscular Hemoglobin)|(Mean Corpuscular Hemoglobin Concentration)"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id5 = data %>% 
+  filter(str_detect(label, 
+                    "Phosphate|(Platelet Count)|Potassium|(Red Blood Cells)|Sodium|(Prothrombin Time)"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+
+lab_id6 = data %>% 
+  filter(str_detect(label, 
+                    "INR|(Partial Thromboplastin Time)|PT|PTT"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id7 = data %>% 
+  filter(str_detect(label, 
+                    "(White Blood Cells)|Lymphocytes|Neutrophils|Monocytes|(Urea Nitrogen)"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+lab_id8 = data %>% 
+  filter(str_detect(label, 
+                    "MCH|MCHC"
+                    )) %>% 
+  filter(fluid == "Blood") %>% 
+  pull(itemid)
+
+
+lab_id = c(lab_id1, lab_id2, lab_id3, lab_id4, lab_id5, lab_id6, lab_id7, lab_id8)
+
+```
+
+
+## Extract ascites events
+From discharge summaries, the first record is treated as the admission record.
+
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM noteevents;"
+
+# data <- dbGetQuery(con, sql_query) %>%
+#   filter(str_detect(description, "ABD")) %>%
+#   mutate(ascites = ifelse(str_detect(text, "ascites"), 1, 0))%>%
+#   mutate(ascites = ifelse(str_detect(text, "(no ascites)|(No ascites)"), 0, ascites))%>%
+#   mutate(ascites = ifelse(is.na(ascites), 0, ascites))
+
+data <- dbGetQuery(con, sql_query) %>%
+  mutate(ascites = ifelse(category == "Discharge summary" & str_detect(text, regex("ascites", ignore_case = TRUE)), 1, 0)) %>% 
+  mutate(ascites = ifelse(category == "Discharge summary" & str_detect(text, regex("(no ascites)", ignore_case = TRUE)), 0, ascites)) %>% 
+  mutate(ascites = ifelse(category == "Radiology" & str_detect(text, regex("ascites", ignore_case = TRUE)), 1, ascites)) %>%
+  mutate(ascites = ifelse(category == "Radiology" & str_detect(text, regex("(no ascites)", ignore_case = TRUE)), 0, ascites))
+
+
+
+data$ascites %>% table() 
+
+asc = data 
+
+asc = asc %>% 
+  filter(hadm_id %in% ha_id) %>% 
+  group_by(subject_id) %>% 
+  arrange(chartdate) %>% 
+  fill(ascites, .direction = "up") %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  select(subject_id, ascites) %>% 
+  mutate(ascites = ifelse(subject_id %in% mali_asc$subject_id, 2, ascites))
+ 
+asc$ascites %>% table() 
+
+head(data)
+
+
+
+```
+
+
+## Extract survival time (1 year)
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM patients;"
+
+data <- dbGetQuery(con, sql_query) %>% 
+  filter(subject_id %in% su_id)
+
+suv = data
+
+table(suv$expire_flag)
+
+```
+
+
+## First merge
+```{r , echo=TRUE}
+
+dta1 = left_join(pat, suv, by = "subject_id")
+```
+
+
+
+
+Extract admission date (first)
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM noteevents;"
+
+data <- dbGetQuery(con, sql_query) %>% 
+  filter(category == "Discharge summary") %>%  
+  filter(description == "Report") %>% 
+  mutate(text = str_replace_all(text, "\\s", "")) %>% 
+  mutate(ad_date = str_extract(text, "(?<=AdmissionDate:\\[\\*\\*\\])([0-9]{4}-[0-9]{1,2}-[0-9]{1,2})(?=\\*\\*\\])")) %>% 
+  mutate(Dis_date = str_extract(text, "(?<=DischargeDate:\\[\\*\\*\\])([0-9]{4}-[0-9]{1,2}-[0-9]{1,2})(?=\\*\\*\\])"))
+
+ad_date = data %>% 
+  filter(hadm_id %in% ha_id) %>% 
+  arrange(hadm_id) %>% 
+  distinct(hadm_id, .keep_all = T)
+
+
+```
+
+
+## Second merge
+
+```{r , echo=TRUE}
+
+dta2 = left_join(dta1, ad_date, by = "subject_id") %>% 
+  select(subject_id, hadm_id.x, icd9_code, gender, dob, dod, dod_hosp, dod_ssn, expire_flag, ad_date, Dis_date) %>% 
+  rename(hadm_id = hadm_id.x)
+
+```
+
+
+### 1) Extract laboratory test item IDs
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM labevents;"
+
+data <- dbGetQuery(con, sql_query) %>% 
+  filter(subject_id %in% su_id)
+
+data_lab = data %>% 
+  select(subject_id, itemid) %>% 
+  left_join(lab_label |> select(-1), by = "itemid") %>% 
+  count(label)
+
+write_xlsx(data_lab, "~/MIMIC_DB/Data/mimic3_lablabels.xlsx")
+
+```
+
+
+### 2) Extract laboratory data
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM labevents;"
+
+data <- dbGetQuery(con, sql_query) %>% 
+  filter(itemid %in% lab_id) %>% 
+  select(-1)
+
+dta3 = left_join(dta2, data, by = "subject_id") %>% 
+  mutate(ad_date = as.POSIXct(ad_date, format = "%Y-%m-%d"),
+        Dis_date = as.POSIXct(Dis_date, format = "%Y-%m-%d")) %>% 
+  filter(charttime >= ad_date & charttime <= Dis_date)  # ensure measurements are during hospitalization
+
+```
+
+
+### 3) Extract admission blood pressure and heart rate
+```{r , echo=TRUE}
+
+sql_query <- "SELECT * FROM d_items;"
+
+data <- dbGetQuery(con, sql_query) 
+
+item_label = data
+  
+
+```
+
+
+```{r , echo=TRUE}
+
+item_label %>% 
+  filter(str_detect(label, "(Blood Pressure)|(Heart)"))
+
+BP_id = c(224167, 227242, 227243, 224643, 220179, 220180)
+
+```
+
+Reading these data directly in R causes errors, so export CSVs from psql and then import into R for analysis
+```{r , echo=TRUE}
+data = read.csv(file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3/data_HR.csv")
+
+
+dta_HR = data %>% 
+   filter(subject_id %in% su_id) %>% 
+    select(subject_id, itemid, charttime, value) %>% 
+    group_by(subject_id, itemid) %>% 
+    arrange(charttime) %>% 
+    slice(1) %>% 
+    select(-charttime) %>% 
+    pivot_wider(names_from = itemid, values_from = value) %>% 
+    ungroup()  
+
+
+data = read.csv(file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3/mimic3_BP2.csv")
+
+
+dta_BP = data %>% 
+   filter(subject_id %in% su_id) %>% 
+    select(subject_id, itemid, charttime, value) %>% 
+    group_by(subject_id, itemid) %>% 
+    arrange(charttime) %>% 
+    slice(1) %>% 
+    select(-charttime) %>% 
+    pivot_wider(names_from = itemid, values_from = value) %>% 
+    ungroup()  
+
+
+data = read.csv(file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3/mimic3_MAP.csv")
+
+
+dta_MAP = data %>% 
+   filter(subject_id %in% su_id) %>% 
+    select(subject_id, itemid, charttime, value) %>% 
+    group_by(subject_id, itemid) %>% 
+    arrange(charttime) %>% 
+    slice(1) %>% 
+    select(-charttime) %>% 
+    pivot_wider(names_from = itemid, values_from = value) %>% 
+    ungroup()  
+
+
+data = read.csv(file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3/mimic3_HR2.csv")
+
+
+dta_HR2 = data %>% 
+   filter(subject_id %in% su_id) %>% 
+    select(subject_id, itemid, charttime, value) %>% 
+    group_by(subject_id, itemid) %>% 
+    arrange(charttime) %>% 
+    slice(1) %>% 
+    select(-charttime) %>% 
+    pivot_wider(names_from = itemid, values_from = value) %>% 
+    ungroup()  
+
+data = read.csv(file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3/mimic3_HR3.csv")
+
+
+dta_HR3 = data %>% 
+   filter(subject_id %in% su_id) %>% 
+    select(subject_id, itemid, charttime, value) %>% 
+    group_by(subject_id, itemid) %>% 
+    arrange(charttime) %>% 
+    slice(1) %>% 
+    select(-charttime) %>% 
+    pivot_wider(names_from = itemid, values_from = value) %>% 
+    ungroup()  
+
+
+```
+
+Data volume is large; process in batches (survival time)
+```{r , echo=TRUE}
+require(lubridate)
+## Extract 96-week survival time
+# dta4 = dta3 %>% 
+#   mutate(age = time_length(interval(dob, ad_date), unit = "year") |> round()) %>% 
+#   mutate(suv_time = time_length(interval(ad_date, dod_ssn), unit = "week") |> round()) %>% 
+#   mutate(suv_time = ifelse(is.na(suv_time), 96, suv_time)) %>% 
+#   mutate(suv_time = ifelse(suv_time >= 96, 96, suv_time)) %>% 
+#   mutate(expire_flag = ifelse(suv_time >= 96, 0, expire_flag)) %>% 
+#   select(subject_id, hadm_id.x, icd9_code, gender, age, expire_flag, suv_time,  ad_date, Dis_date, itemid, charttime, value ,valuenum, valueuom) %>% 
+#   rename(hadm_id = hadm_id.x)
+
+## Extract all survival times
+dta4 = dta3 %>%
+  mutate(age = time_length(interval(dob, ad_date), unit = "year") |> round()) %>%
+  mutate(suv_time = time_length(interval(ad_date, dod_ssn), unit = "week") |> round()) %>% 
+  select(subject_id, hadm_id.x, icd9_code, gender, age, expire_flag, suv_time,  ad_date, Dis_date, itemid, charttime, value ,valuenum, valueuom) %>%
+  rename(hadm_id = hadm_id.x)
+
+
+
+```
+
+
+
+CRP records are few (n=95) and excluded
+```{r eval=FALSE, , echo=TRUE, include=FALSE}
+
+dta_crp = dta4 %>% 
+  filter(itemid == 50889) %>%
+  mutate(valuenum = ifelse(is.na(valuenum), 300, valuenum)) %>% 
+  group_by(subject_id) %>% 
+  arrange(charttime) %>% 
+  slice(1) %>% 
+  pivot_wider(names_from = itemid, values_from = valuenum) %>% 
+  ungroup() %>% 
+  select(subject_id:Dis_date, `50889`) %>% 
+  rename(CRP = `50889`) %>% 
+  mutate(inhos_time = time_length(interval(ad_date, Dis_date), unit = "week") ) 
+  
+  
+```
+
+
+
+### 4) Creatin at 48 hour
+```{r , echo=TRUE}
+
+dta_48 = dta4 %>% 
+  filter(itemid == 50912) %>% 
+  group_by(subject_id) %>% 
+  arrange(charttime) %>% 
+  fill(valuenum, .direction = "up") %>% 
+  slice(2) %>% 
+  ungroup() %>% 
+  select(subject_id, valuenum) %>% 
+  rename(cea_48 = valuenum)
+  
+  
+```
+
+
+### 5) Creatin at max
+```{r , echo=TRUE}
+
+dta_max = dta4 %>% 
+  filter(itemid == 50912) %>% 
+  group_by(subject_id) %>% 
+  arrange(charttime) %>% 
+  summarise(cea_max = max(valuenum, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  select(subject_id, cea_max) 
+  
+```
+
+
+
+Long-to-wide transformation
+```{r , echo=TRUE}
+
+dta5 = dta4 %>% 
+  select(-c(valueuom, value)) %>% 
+  group_by(subject_id, itemid, charttime) %>% 
+  arrange(charttime) %>% 
+  fill(valuenum, .direction = "up") %>% 
+  ungroup()  %>% 
+  group_by(subject_id, itemid) %>% 
+  arrange(charttime) %>% 
+  slice(1) %>% 
+  select(-charttime) %>% 
+  pivot_wider(names_from = itemid, values_from = valuenum) %>% 
+  ungroup()  
+  
+```
+
+## Extract race
+
+```{r , echo=TRUE}
+sql_query <- "SELECT * FROM ADMISSIONS;"
+
+data <- dbGetQuery(con, sql_query) %>% 
+  filter(subject_id %in% su_id) %>% 
+  select(subject_id, ethnicity) %>% 
+  distinct(subject_id, .keep_all = T)
+
+dta_eth = data
+
+```
+
+## Third merge
+
+```{r , echo=TRUE}
+# fn = names(dta_final)[10:51]
+# lab_label %>% filter(itemid %in% fn) %>% count(itemid, label)
+dta_final = left_join(dta5, dta_48, by = "subject_id") %>% 
+        left_join(dta_max, by = "subject_id") %>% 
+        left_join(asc, by = "subject_id") %>% 
+        left_join(dta_eth, by = "subject_id") %>% 
+        left_join(dta_BP, by = "subject_id") %>% 
+         left_join(dta_HR, by = "subject_id") %>% 
+         left_join(dta_HR2, by = "subject_id") %>%
+         left_join(dta_HR3, by = "subject_id") %>%
+         left_join(HT |>select(subject_id, HT), by = "subject_id") %>% 
+         left_join(HE |>select(subject_id, HE), by = "subject_id") %>% 
+         left_join(DM|>select(subject_id, DM), by = "subject_id") %>%
+         left_join(mali |> select(subject_id, MT), by = "subject_id") %>% 
+         left_join(infec_eve |> select(subject_id, Infection), by = "subject_id") %>% 
+        mutate(gender = as.factor(gender),
+               ascites = as.factor(ascites),
+               Infection = ifelse(is.na(Infection), 0, Infection) |>
+                 as.factor()) %>% 
+        mutate(HT = ifelse(is.na(HT), 0, HT),
+               HT =  as.factor(HT),
+               HE = ifelse(is.na(HE), 0, HE),
+               HE =  as.factor(HE),
+               DM = ifelse(is.na(DM), 0, DM),
+               DM =  as.factor(DM),
+               MT = ifelse(is.na(MT), 0, MT),
+               MT =  as.factor(MT),
+              ) %>% 
+        rename(
+Cl=`50806`,    
+Hct=`50810`,   
+HGB=`50811`,   
+Lac=`50813`,   
+K=`50822`,     
+Na=`50824`,    
+HGB_AC=`50852`,
+AB_HGB=`50855`, 
+ALT=`50861`,
+ALB=`50862`,   
+ALP=`50863`,
+GGT=`50927`,
+Anion_Gap=`50868`, 
+AST=`50878`,
+TBIL=`50885`, 
+DBIL= `50884`,
+Ca=`50893`,        
+Cl2=`50902`,       
+CREA=`50912`, 
+LDH=`50954`,  
+Mg=`50960`,        
+Phos=`50970`, 
+K2=`50971`,        
+Na2=`50983`,       
+BUN=`51006`,       
+Aty_Lym=`51143`, 
+Hct2=`51221`,    
+HGB2=`51222`,       
+HGB_A2=`51223`,  
+HGB_C=`51224`,   
+Hyper_NE=`51232`,
+INR=`51237`,       
+Leu_ALP=`51241`, 
+Lym=`51244`,    
+Lym2=`51245`,  
+Mono=`51254`,  
+NE=`51256`,    
+PLT=`51265`,   
+PT=`51274`,    
+APTT=`51275`,  
+RBC=`51279`,   
+WBC=`51301`, 
+SBP=`220179`,
+DBP=`220180`,
+Glu=`50809`,
+Glu2=`50931`,
+HR=`220045`,
+MCH=`51248`,
+MCHC=`51249`
+        ) %>% 
+        mutate(Cl2 = ifelse(is.na(Cl2), Cl, Cl2)) %>% 
+               select(-Cl) %>% 
+         rename(Cl = Cl2) %>% 
+          mutate(Glu = ifelse(is.na(Glu), Glu2, Glu)) %>% 
+               select(-Glu2) %>% 
+                   mutate(HGB2 = ifelse(is.na(HGB2), HGB, HGB2)) %>% 
+               select(-HGB) %>% 
+         rename(HGB = HGB2) %>% 
+                 mutate(Lym = ifelse(is.na(Lym), Lym2, Lym)) %>% 
+                 select(-Lym2) %>% 
+                 mutate(Hct2 = ifelse(is.na(Hct2), Hct, Hct2)) %>% 
+               select(-Hct) %>% 
+             rename(Hct = Hct2) %>%
+            mutate(K2 = ifelse(is.na(K2), K, K2)) %>% 
+               select(-K) %>% 
+             rename(K = K2) %>%
+              mutate(Na2 = ifelse(is.na(Na2), Na, Na2)) %>% 
+               select(-Na) %>% 
+             rename(Na = Na2) %>%
+                   mutate(HR = ifelse(is.na(HR), `211.x`, HR),
+                          HR = ifelse(is.na(HR), `211.y`, HR)
+                          ) %>%
+               mutate(HR = as.numeric(HR)) %>% 
+               select(-`211.x`) %>% 
+              select(-`211.y`) %>% 
+                 select(-c(Aty_Lym, Hyper_NE, HGB_AC, AB_HGB, Leu_ALP, HGB_C, HGB_A2)) %>% 
+                 rename(Lym_pct = Lym,
+                        NE_Pct = NE,
+                        Mono_pct = Mono,
+                        asc = ascites) %>% 
+                 select(-c(SBP, DBP, HR)) %>% 
+                mutate(expire_flag = as.factor(expire_flag)) 
+                
+
+save(dta_final, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_updated.Rdata")
+```
+
+> Surprisingly, GGT, a common marker, has substantial missingness in MIMIC-III. A possible approach is to check whether the training cohort's model can remove GGT.
+
+```{r , echo=TRUE}
+summary(dta_final) 
+```
+
+## Handle outliers
+
+```{r eval=FALSE, , echo=TRUE, include=FALSE}
+# Inspect data
+
+unusual_num <- function(colname, df) {
+ 
+  # Check if column exists in dataframe
+  if (!colname %in% names(df)) {
+    stop(paste("Column", colname, "does not exist in the dataframe"))
+  }
+  
+  # Missing values    
+  na_num <- length(which(is.na(df[[colname]])))    
+  na_rate <- paste(round(na_num / length(df[[colname]]), 4) * 100, "%" , sep = '')
+
+  # Check if the column is a factor
+  if (is.factor(df[[colname]])) {
+    result <- data.frame('变量名' = colname, 
+                         '下界' = '-', 
+                         '上界' = '-', 
+                         '异常值数量' = '-', 
+                         '缺失值数量' = na_num, 
+                         '缺失比例' = na_rate)        
+    return(result)
+  }
+
+  # Check if the column is numeric
+  if (!is.numeric(df[[colname]])) {
+    stop(paste("Column", colname, "is not numeric"))
+  }
+
+  s <- summary(df[[colname]])    
+
+  # Compute lower bound l=Q1-1.5*IQR    
+  IQR <- as.numeric(s[5] - s[2])    
+  l <- round(as.numeric(s[2] - 1.5 * IQR), 3)    
+  # Compute upper bound u=Q3+1.5*IQR
+  u <- round(as.numeric(s[5] + 1.5 * IQR), 3)
+  unusual_num <- length(which((df[[colname]] < l) | (df[[colname]] > u)))
+  result <- data.frame('变量名' = colname, 
+                       '下界' = l, 
+                       '上界' = u,
+                       '异常值数量' = unusual_num,
+                       '缺失值数量' = na_num,
+                       '缺失比例' = na_rate)
+  return(result)
+}
+
+fn = names(dta_final)[c(5, 10:42)]
+res = lapply(fn, unusual_num, df = dta_final)
+
+res <- do.call(rbind, res)
+
+print(res)
+```
+
+
+```{r eval=FALSE, , echo=TRUE, include=FALSE}
+
+# Function to remove outliers
+# If above the upper limit, set to upper limit; if below the lower limit, set to lower limit
+resolve_unusual <- function(colnames, df) {    
+  res <- df    
+  for(colname in colnames) {      
+  s <- summary(res[[colname]])       
+  IQR <- as.numeric(s[5] - s[2])       
+  l <- round(as.numeric(s[2] - 1.5*IQR),3)      
+  u <- round(as.numeric(s[5] + 1.5*IQR),3)       # handle values greater than the upper bound      
+  res[[colname]][which(res[[colname]]>u)]=u       # handle values less than the lower bound       
+  res[[colname]][which(res[[colname]]<l)]=l }    
+  return (res)
+  }
+# Remove outliers
+fn = names(dta_final)[c(5, 10:42)]
+
+df_clean <- resolve_unusual(colnames = fn, df = dta_final) %>% 
+  mutate(across(where(is.numeric))
+         
+  )
+
+save(df_clean, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_clean_updated.Rdata")
+```
+
+
+
+```{r eval=FALSE, include=FALSE}
+
+## Inspect outliers after processing
+fn = names(df_clean)[c(5, 10:42)]
+
+res = lapply(fn, unusual_num, df = df_clean)
+
+res <- do.call(rbind, res)
+
+print(res)
+
+```
+
+## Check the missing value
+
+```{r}
+
+#### Inspect missingness   
+dta_final %>% 
+  naniar::miss_var_summary() %>% 
+  print(n = 10) 
+
+df_clean %>% 
+  naniar::miss_var_summary() %>% 
+  print(n = 10) 
+
+```
+
+> The missing rates for GGT, DBIL, and suv_time are 50.7%, 57.6%, and 95.5%, respectively.
+
+
+## Multiple imputation
+
+```{r , echo=TRUE}
+require(mice)
+
+```
+
+
+```{r , echo=TRUE, include=FALSE}
+df_clean = dta_final
+
+# see all the default settings for imputation
+impu_default <- mice(df_clean[,-c(1:3, 7:9)], maxit = 0)
+summary(impu_default)
+
+# see the predictor structure
+pred <- quickpred(df_clean[,-c(1:3, 7:9)])
+pred
+
+# imputation method
+meth <- impu_default$meth
+meth
+
+K <- 10 # 10 times
+df_impu <- vector(K, mode="list")
+imputation <- mice(df_clean[,-c(1:3, 7:9)], maxit = 25, m = K, seed = 1234, pred = pred, method = "rf", print = TRUE)
+
+for (i in 1:K) {
+  df_impu[[i]] <- mice::complete(imputation, i)
+}
+
+
+# save(df_impu, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_imput_updated.Rdata")
+
+save(df_impu, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_imput_keep_outliers.Rdata")
+```
+
+
+
+```{r , echo=TRUE}
+
+## Use the 10th completed dataset as the imputed result for completion
+dt  <- df_impu[[10]]
+dt %>%
+  miss_var_summary()
+
+
+save(dt, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_imput10_updated.Rdata")
+```
+
+
+## Extract samples with complete survival time
+
+```{r}
+
+dta_suv = dta_final %>% 
+      filter(!is.na(suv_time)) 
+
+summary(dta_suv)
+
+```
+
+```{r}
+## Check the missing value
+
+dta_suv %>%
+  miss_var_summary()
+
+```
+
+## Treat the outliers
+
+
+```{r eval=FALSE, , echo=TRUE, include=FALSE}
+# Inspect data
+
+unusual_num <- function(colname, df) {
+ 
+  # Check if column exists in dataframe
+  if (!colname %in% names(df)) {
+    stop(paste("Column", colname, "does not exist in the dataframe"))
+  }
+  
+  # Missing values    
+  na_num <- length(which(is.na(df[[colname]])))    
+  na_rate <- paste(round(na_num / length(df[[colname]]), 4) * 100, "%" , sep = '')
+
+  # Check if the column is a factor
+  if (is.factor(df[[colname]])) {
+    result <- data.frame('变量名' = colname, 
+                         '下界' = '-', 
+                         '上界' = '-', 
+                         '异常值数量' = '-', 
+                         '缺失值数量' = na_num, 
+                         '缺失比例' = na_rate)        
+    return(result)
+  }
+
+  # Check if the column is numeric
+  if (!is.numeric(df[[colname]])) {
+    stop(paste("Column", colname, "is not numeric"))
+  }
+
+  s <- summary(df[[colname]])    
+
+  # Compute lower bound l=Q1-1.5*IQR    
+  IQR <- as.numeric(s[5] - s[2])    
+  l <- round(as.numeric(s[2] - 1.5 * IQR), 3)    
+  # Compute upper bound u=Q3+1.5*IQR
+  u <- round(as.numeric(s[5] + 1.5 * IQR), 3)
+  unusual_num <- length(which((df[[colname]] < l) | (df[[colname]] > u)))
+  result <- data.frame('变量名' = colname, 
+                       '下界' = l, 
+                       '上界' = u,
+                       '异常值数量' = unusual_num,
+                       '缺失值数量' = na_num,
+                       '缺失比例' = na_rate)
+  return(result)
+}
+
+fn = names(dta_suv)[c(5, 10:43)]
+res = lapply(fn, unusual_num, df = dta_suv)
+
+res <- do.call(rbind, res)
+
+print(res)
+```
+
+
+```{r eval=FALSE, , echo=TRUE, include=FALSE}
+
+# Function to remove outliers
+# If above the upper limit, set to upper limit; if below the lower limit, set to lower limit
+resolve_unusual <- function(colnames, df) {    
+  res <- df    
+  for(colname in colnames) {      
+  s <- summary(res[[colname]])       
+  IQR <- as.numeric(s[5] - s[2])       
+  l <- round(as.numeric(s[2] - 1.5*IQR),3)      
+  u <- round(as.numeric(s[5] + 1.5*IQR),3)       # handle values greater than the upper bound      
+  res[[colname]][which(res[[colname]]>u)]=u       # handle values less than the lower bound       
+  res[[colname]][which(res[[colname]]<l)]=l }    
+  return (res)
+  }
+# Remove outliers
+fn = names(dta_suv)[c(5, 10:43)]
+
+df_clean <- resolve_unusual(colnames = fn, df = dta_suv) %>% 
+  mutate(across(where(is.numeric)))
+
+save(df_clean, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_clean_suv.Rdata")
+```
+
+
+```{r eval=FALSE, include=FALSE}
+
+## Inspect outliers after processing
+fn = names(df_clean)[c(5, 10:43)]
+
+res = lapply(fn, unusual_num, df = df_clean)
+
+res <- do.call(rbind, res)
+
+print(res)
+
+```
+
+## Multiple imputation
+
+```{r , echo=TRUE, include=FALSE}
+
+require(mice)
+
+# see all the default settings for imputation
+impu_default <- mice(df_clean[,-c(1:3, 8:9)], maxit = 0)
+summary(impu_default)
+
+# see the predictor structure
+pred <- quickpred(df_clean[,-c(1:3, 8:9)])
+pred
+
+# imputation method
+meth <- impu_default$meth
+meth
+
+K <- 10 # 10 times
+df_impu <- vector(K, mode="list")
+imputation <- mice(df_clean[,-c(1:3, 8:9)], maxit = 25, m = K, seed = 1234, pred = pred, method = "rf", print = TRUE)
+
+for (i in 1:K) {
+  df_impu[[i]] <- mice::complete(imputation, i)
+}
+
+
+save(df_impu, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_imput_suv.Rdata")
+```
+
+
+```{r , echo=TRUE}
+
+## Use the 10th completed dataset as the imputed result for completion
+dt  <- df_impu[[10]]
+dt %>%
+  miss_var_summary()
+
+
+save(dt, file = "~/Rspace/clinical-model-construction/文海的数据/Data/MIMIC_3_update_241219/validation_mimic3_imput10_suv.Rdata")
+```
+
+
+# Closing remarks
+- Although this is called an update, I only added race to compute eGFR
+- Beyond lacking CysC in MIMIC-III, another issue is the inability to confirm ascites at admission
+- These patients are more severely ill, as reflected by mortality
